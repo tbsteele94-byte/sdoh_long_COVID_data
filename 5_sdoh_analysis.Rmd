@@ -1,0 +1,216 @@
+
+```{r}
+# Install packages
+install.packages(c("DBI", "RPostgres", "tidyverse", "broom"))
+
+# Load libraries
+library(DBI)
+library(RPostgres)
+library(tidyverse)
+library(broom)
+```
+
+```{r}
+#Connect to Postgres database
+con <- dbConnect(
+  RPostgres::Postgres(),
+  dbname   = "long_covid_sdoh",
+  host     = "localhost",
+  port     = 5432,
+  user     = "postgres",
+  password = "*****" #My password removed
+)
+
+# Verify connection
+dbListTables(con)
+```
+
+```{r}
+
+# Generating the dataset to analyze
+analytic_query <- "
+SELECT 
+    p.patient_id,
+    p.race_ethnicity,
+    p.age_group,
+    c.fips_code,
+    c.state_id,
+    c.overall_svi_score,
+    pe.income_bracket,
+    pe.health_insurance_type,
+    pe.employment_status,
+    pe.education_level,
+    ph.housing_tenure,
+    ph.missed_rent_payment,
+    ph.eviction_risk_flag,
+    pfs.food_scarcity_status,
+    pfs.used_food_assistance,
+    st.survey_phase,
+    lcc.had_acute_covid,
+    lcc.long_covid_flag,
+    lcc.activity_limitation_level,
+    -- Composite SDoH Vulnerability Score (0-3)
+    (
+        CASE WHEN pe.income_bracket LIKE '%Less than $25,000%' THEN 1 ELSE 0 END +
+        CASE WHEN ph.missed_rent_payment = TRUE OR ph.eviction_risk_flag = TRUE THEN 1 ELSE 0 END +
+        CASE WHEN pfs.food_scarcity_status LIKE '%not enough%' THEN 1 ELSE 0 END
+    ) AS vulnerability_score
+FROM patients p
+JOIN surveys_taken st 
+    ON p.patient_id = st.patient_id
+JOIN long_covid_cases lcc 
+    ON st.survey_response_id = lcc.survey_response_id
+LEFT JOIN patient_economics pe 
+    ON p.patient_id = pe.patient_id
+LEFT JOIN patient_housing ph 
+    ON p.patient_id = ph.patient_id
+LEFT JOIN patient_food_security pfs 
+    ON p.patient_id = pfs.patient_id
+LEFT JOIN counties c 
+    ON p.fips_code = c.fips_code;
+"
+
+# Execute query and pull into R 
+df_raw <- dbGetQuery(con, analytic_query)
+
+# Disconnect from database
+dbDisconnect(con)
+```
+
+```{r}
+# Prepare dataset for statistical modeling
+df_model <- df_raw %>%
+  # Filter to respondents with valid outcome data
+  filter(!is.na(long_covid_flag)) %>%
+  mutate(
+    # Outcome variable as binary integer / factor
+    long_covid_binary = if_else(long_covid_flag == TRUE, 1, 0),
+    
+    # 1. Income (Reference: Highest Income Bracket)
+    income_bracket = factor(income_bracket),
+    income_bracket = relevel(income_bracket, ref = "$200,000 and above"),
+    
+    # 2. Race / Ethnicity (Reference: White alone, non-Hispanic)
+    race_ethnicity = factor(race_ethnicity),
+    race_ethnicity = relevel(race_ethnicity, ref = "White alone, non-Hispanic"),
+    
+    # 3. Age Group (Reference: 18-29)
+    age_group = factor(age_group),
+    age_group = relevel(age_group, ref = "18-29"),
+    
+    # 4. Housing Insecurity Flag
+    housing_insecure = if_else(missed_rent_payment == TRUE | eviction_risk_flag == TRUE, 1, 0),
+    
+    # 5. Food Insecurity Flag
+    food_insecure = if_else(str_detect(food_scarcity_status, "not enough"), 1, 0),
+    
+    # 6. Education (Reference: Bachelor Degree or Graduate Degree)
+    education_level = factor(education_level),
+    education_level = relevel(education_level, ref = "Bachelor Degree"),
+    
+    # 7. Vulnerability Score as both Continuous & Factor
+    vulnerability_score_factor = factor(vulnerability_score, levels = 0:3)
+  )
+
+# Inspect structure
+glimpse(df_model)
+```
+
+```{r}
+library(car)
+library(scales)
+
+# Model 1: Multivariable SDoH Domain Model
+model_sdoh <- glm(
+  long_covid_binary ~ income_bracket + 
+                      food_insecure + 
+                      housing_insecure + 
+                      health_insurance_type + 
+                      race_ethnicity + 
+                      age_group + 
+                      education_level,
+  data   = df_model,
+  family = binomial(link = "logit")
+)
+
+# Model 2: Cumulative SDoH Vulnerability Score Model
+model_cumulative <- glm(
+  long_covid_binary ~ vulnerability_score_factor + 
+                      race_ethnicity + 
+                      age_group + 
+                      education_level,
+  data   = df_model,
+  family = binomial(link = "logit")
+)
+```
+
+```{r}
+# Tidy and format Model 1 results
+table_sdoh_or <- tidy(model_sdoh, exponentiate = TRUE, conf.int = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    aOR      = round(estimate, 2),
+    CI_Lower = round(conf.low, 2),
+    CI_Upper = round(conf.high, 2),
+    p_formatted = case_when(
+      p.value < 0.001 ~ "< 0.001",
+      TRUE            ~ sprintf("%.3f", p.value)
+    )
+  ) %>%
+  select(term, aOR, CI_Lower, CI_Upper, p_formatted)
+
+# Tidy and format Model 2 results
+table_cumulative_or <- tidy(model_cumulative, exponentiate = TRUE, conf.int = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    aOR      = round(estimate, 2),
+    CI_Lower = round(conf.low, 2),
+    CI_Upper = round(conf.high, 2),
+    p_formatted = case_when(
+      p.value < 0.001 ~ "< 0.001",
+      TRUE            ~ sprintf("%.3f", p.value)
+    )
+  ) %>%
+  select(term, aOR, CI_Lower, CI_Upper, p_formatted)
+
+# View formatted tables
+print(table_sdoh_or, n = 30)
+print(table_cumulative_or)
+```
+
+```{r}
+# Calculate VIF for Model 1
+vif_results <- car::vif(model_sdoh)
+print(vif_results)
+```
+
+```{r}
+#Preparing data for Forest Plot
+forest_data <- table_sdoh_or %>%
+  filter(
+    str_detect(term, "income_bracket") |
+    str_detect(term, "insecure") |
+    str_detect(term, "health_insurance")
+  ) %>%
+  mutate(
+    term_clean = str_remove_all(term, "income_bracket|health_insurance_type"),
+    term_clean = fct_reorder(term_clean, aOR)
+  )
+
+# Plot Forest Plot
+ggplot(forest_data, aes(x = aOR, y = term_clean)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+  geom_errorbarh(aes(xmin = CI_Lower, xmax = CI_Upper), height = 0.25, color = "#2c3e50", linewidth = 0.8) +
+  geom_point(color = "#e74c3c", size = 3) +
+  labs(
+    title    = "aOR for Long COVID Risk by SDoH Factor",
+    subtitle = "Adjusted for Race/Ethnicity, Age Group, and Education Level",
+    x        = "Adjusted Odds Ratio (95% CI)",
+    y        = "SDoH Predictor"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
