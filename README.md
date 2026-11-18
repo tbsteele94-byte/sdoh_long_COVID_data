@@ -48,7 +48,7 @@ I designed an eight-table PostgreSQL database structured around Third Normal For
 
 The schema uses primary and foreign keys, one-to-one socioeconomic extensions, one-to-many survey tracking, check constraints, and cascading deletes to support data integrity.
 
-*Add entity-relationship diagram here.*
+![Database Entity Relationship Diagram](database_erd.png)
 
 ## Python ETL and Data Preparation
 
@@ -135,8 +135,9 @@ I created an interactive Tableau dashboard connected to PostgreSQL summary views
 
 The source analysis reports **68,454 respondents**, **36,945 acute COVID-19 reports**, and **9,302 Long COVID reports**, corresponding to **25.18%** of acute COVID-19 reports. The SQL findings described above should be used when updating any dashboard labels or narrative text.
 
-*Add dashboard screenshot and Tableau link here.*
+![Long COVID and Social Determinants of Health Dashboard](long_covid_dashboard.png)
 
+The interactive Tableau workbook is available in the [repository files](6_sdoh_dashboard.twbx).
 ## Limitations
 
 1. **Geographic precision:** Public survey data do not identify respondents' counties. State-constrained county assignments introduce uncertainty into county-level SVI analyses.
