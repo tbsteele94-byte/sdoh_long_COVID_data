@@ -159,8 +159,10 @@ Across the descriptive and adjusted analyses, economic insecurity and overlappin
 
 ## Project Resources
 
-- **SQL analysis:** [Add repository path]
-- **Python ETL:** [Add repository path]
-- **Database schema / ERD:** [Add repository path]
-- **R statistical analysis:** [Add repository path]
-- **Tableau dashboard:** [Add link]
+1. [Database and Table Creation](1_database_table_creation.sql)
+2. [Python ETL Pipeline](2_etl_pipeline.ipynb)
+3. [SQL Data Cleaning](3_dml_data_cleaning.sql)
+4. [SQL Analytical Queries](4_analytical_queries_sql.sql)
+5. [SQL Query Results](4.5_analytical_query_results.xlsx)
+6. [R Statistical Analysis](5_sdoh_analysis.Rmd)
+7. [Tableau Dashboard](6_sdoh_dashboard.twbx)
